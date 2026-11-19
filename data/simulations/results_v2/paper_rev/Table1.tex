@@ -1,0 +1,36 @@
+\begin{table}[h!]
+\centering
+\small
+\caption{Simulation, training and evaluation settings.}
+\label{tab:settings}
+\begin{tabular}{ll}
+\toprule
+Item & Setting \\
+\midrule
+Array & ULA, $N=8$, $d=\lambda/2$ \\
+Training sources & $M=3$, non-coherent, equal powers \\
+Training snapshots / SNR & $T=200$; SNR $\sim\mathcal{U}[-10,20]$ dB (true SNR) \\
+Spacing error & $b\sim\mathcal{U}(\pm0.05)\lambda$, one per array realization \\
+Training data & 100,000 samples (90k / 10k), data seed 2026 \\
+Autocorrelation lags & $\tau=0,\dots,7$; SubspaceNet-FC: lag 0 only \\
+Optimizer & Adam, lr $10^{-3}$, batch 2048, early stopping (patience 15) \\
+Seeds & 0, 1, 2 \\
+Test samples & 2,000 per sweep point; 5,000 for E10 and E12 \\
+\midrule
+\textit{Experiment} & \textit{Swept parameter: values} \\
+\midrule
+E1 & SNR, non-coherent, $T=200$: $-10, -5, 0, 5, 10, 15, 20$ \\
+E2 & SNR, non-coherent, $T=2$: $-10, -5, 0, 5, 10, 15, 20$ \\
+E3 & SNR, coherent, $T=200$: $-10, -5, 0, 5, 10, 15, 20$ \\
+E4 & SNR, coherent, $T=20$: $-10, -5, 0, 5, 10, 15, 20$ \\
+E5 & SNR, coherent, $T=2$: $-10, -5, 0, 5, 10, 15, 20$ \\
+E6 & $T$, coherent, $M=2$: $2, 5, 10, 20, 50, 100, 200$ \\
+E7 & spacing error $b$: $0, 0.02, 0.04, 0.06, 0.08, 0.1$ \\
+E8 & steering-vector noise $\sigma^2_{sv}$ ($b=0$): $0, 0.05, 0.1, 0.25, 0.5, 0.75$ \\
+E9 & SIR, one strong interferer: $0, -5, -10, -15, -20, -30$ \\
+E10 / E12 & base point ($b\le0.05\lambda$) / calibrated array ($b=0$), SNR 10 dB, $T=200$ \\
+E11 & Toeplitz-regularizer ablation (inside E10) \\
+E13 & parameters and latency (batch 1) \\
+\hline
+\end{tabular}
+\end{table}

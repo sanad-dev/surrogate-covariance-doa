@@ -50,7 +50,7 @@ Methods:
 # Imports
 import numpy as np
 import scipy
-from src.models import SubspaceNet
+from src.models import SubspaceNet, SubspaceNetAttn, SubspaceNetIter
 from src.system_model import SystemModel
 from src.utils import sum_of_diag, find_roots, R2D
 
@@ -156,7 +156,7 @@ class SubspaceMethod(object):
                 Exception: If the given model for covariance calculation is not from SubspaceNet type.
             """
             # Validate model type
-            if not isinstance(model, SubspaceNet):
+            if not isinstance(model, (SubspaceNet, SubspaceNetAttn, SubspaceNetIter)):
                 raise Exception(
                     (
                         "SubspaceMethod.subspacenet_covariance: given model for covariance\
@@ -167,7 +167,7 @@ class SubspaceMethod(object):
             subspacenet_model.eval()
             covariance_mat = subspacenet_model(X)[-1]
             # Convert to np.array type
-            covariance_mat = np.array(covariance_mat.squeeze())
+            covariance_mat = np.array(covariance_mat.squeeze().cpu())
             return covariance_mat
 
         if mode.startswith("spatial_smoothing"):
@@ -176,6 +176,9 @@ class SubspaceMethod(object):
             return subspacnet_covariance(X, model)
         elif mode.startswith("sample"):
             return np.cov(X)
+        elif mode.startswith("covariance"):
+            # X already is a covariance matrix (e.g. a batched SubspaceNet output)
+            return X
         else:
             raise Exception(
                 (
@@ -244,6 +247,17 @@ class MUSIC(SubspaceMethod):
         super().__init__(system_model)
         # angle axis for representation of the MUSIC spectrum
         self._angels = np.linspace(-1 * np.pi / 2, np.pi / 2, 18000, endpoint=False)
+        # Precompute the frequency-independent part of the steering-vector
+        # phase term once (sin(angle) x per-sensor spacing coefficient),
+        # since this doesn't depend on f. spectrum_calculation is called up
+        # to hundreds of thousands of times in broadband scenarios (once per
+        # frequency bin, per test sample), so avoiding this recomputation
+        # each time meaningfully reduces overhead.
+        self._sv_coeff = (
+            self.system_model.dist[self.system_model.params.signal_type]
+            * self.system_model.array
+        )  # shape [N]
+        self._sv_base = np.outer(np.sin(self._angels), self._sv_coeff)  # [num_angles, N]
 
     def spectrum_calculation(
         self, Un: np.ndarray, f: float = 1, array_form: str = "ULA"
@@ -251,6 +265,14 @@ class MUSIC(SubspaceMethod):
         """
         Calculates the MUSIC spectrum and the core equation for DOA estimation,
         and calculate the peaks of the spectrum.
+
+        Vectorized across the full angle grid (self._angels, 18000 points):
+        previously this called self.system_model.steering_vec(...) once per
+        angle in a Python for-loop, which was the dominant bottleneck for
+        broadband evaluation (50 frequency bins x 18000 angles = up to
+        900,000 sequential Python-level calls per sample). Now the full
+        steering-vector matrix for every angle is built with a single
+        vectorized (outer-product) computation.
 
         Args:
         -----
@@ -263,18 +285,16 @@ class MUSIC(SubspaceMethod):
             spectrum (np.ndarray): MUSIC spectrum.
             core_equation (np.ndarray): Core equation.
         """
-        core_equation = []
-        # Run over all angels in grid
-        for angle in self._angels:
-            # Calculate the steered vector to angle
-            a = self.system_model.steering_vec(theta=angle, f=f, array_form=array_form, nominal = True)[
-                : Un.shape[0]
-            ]
-            # Calculate the core equation element
-            core_equation.append(np.conj(a).T @ Un @ np.conj(Un).T @ a)
-        # Convert core equation to complex np.ndarray form
-        core_equation = np.array(core_equation, dtype=complex)
-        # MUSIC spectrum as the inverse core equation
+        if not array_form.startswith("ULA"):
+            raise Exception(
+                f"MUSIC.spectrum_calculation: array_form {array_form} is not implemented"
+            )
+        f_sv = {"NarrowBand": 1, "Broadband": f}
+        freq_factor = f_sv[self.system_model.params.signal_type]
+        # SV shape: [num_angles, N]
+        SV = np.exp(-2j * np.pi * freq_factor * self._sv_base)[:, : Un.shape[0]]
+        P = Un @ np.conj(Un).T  # [N, N] noise-subspace projector
+        core_equation = np.einsum("ij,jk,ik->i", np.conj(SV), P, SV)
         spectrum = 1 / core_equation
         return spectrum, core_equation
 

@@ -116,6 +116,8 @@ class Samples(SystemModel):
             Exception: If the signal_type is not defined.
 
         """
+        # One array geometry per sample, shared by all its sources
+        self.draw_array_realization()
         # Generate signal matrix
         signal = self.signal_creation(signal_mean, signal_variance)
         # Generate noise matrix
@@ -208,12 +210,18 @@ class Samples(SystemModel):
             Exception: If the signal type is not defined.
             Exception: If the signal nature is not defined.
         """
-        amplitude = 10 ** (self.params.snr / 10)
+        snr = self.params.snr
+        if isinstance(snr, (tuple, list)):
+            # Mixed-SNR data: one SNR per sample, uniform over [low, high] dB
+            snr = np.random.uniform(snr[0], snr[1])
+        self.snr_draw = snr
+        # Amplitude scaling so that 10*log10(signal power / noise power) = snr
+        amplitude = 10 ** (snr / 20)
         # NarrowBand signal creation
         if self.params.signal_type == "NarrowBand":
             if self.params.signal_nature == "non-coherent":
                 # create M non-coherent signals
-                return (
+                signal = (
                     amplitude
                     * (np.sqrt(2) / 2)
                     * np.sqrt(signal_variance)
@@ -236,7 +244,11 @@ class Samples(SystemModel):
                     )
                     + signal_mean
                 )
-                return np.repeat(sig, self.params.M, axis=0)
+                signal = np.repeat(sig, self.params.M, axis=0)
+            if self.params.source_power_db is not None:
+                # Unequal source powers (interference experiments), one offset per source
+                signal = signal * 10 ** (np.asarray(self.params.source_power_db)[:, None] / 20)
+            return signal
 
         # OFDM Broadband signal creation
         elif self.params.signal_type.startswith("Broadband"):

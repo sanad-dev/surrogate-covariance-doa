@@ -1,0 +1,24 @@
+\begin{table}[h!]
+\centering
+\small
+\caption{Calibrated array, $b=0$ (E12).}
+\label{tab:e12}
+\begin{tabular}{llll}
+\toprule
+Method & RMSPE [$^\circ$] & Seeds 0 / 1 / 2 [$^\circ$] & $p$ vs.\ SubspaceNet (seed 0) \\
+\midrule
+Iter (proposed) & 3.908 (0.109) & 3.763 / 3.935 / 4.026 & $<10^{-4}$ / 0.802 / 0.00279 \\
+Iter (proposed) + Toeplitz & 3.836 (0.053) & 3.825 / 3.776 / 3.906 & $<10^{-4}$ / $<10^{-4}$ / 0.0587 \\
+Attn (proposed) & 3.827 (0.057) & 3.844 / 3.751 / 3.886 & $<10^{-4}$ / $<10^{-4}$ / 0.555 \\
+Attn (proposed) + Toeplitz & 3.885 (0.027) & 3.905 / 3.903 / 3.846 & 0.0173 / 0.203 / $<10^{-4}$ \\
+SubspaceNet & 3.847 (0.079) & 3.944 / 3.848 / 3.750 & -- / $<10^{-4}$ / $<10^{-4}$ \\
+SubspaceNet + Toeplitz & 3.954 (0.013) & 3.936 / 3.962 / 3.966 & 0.238 / 0.000295 / 0.00936 \\
+\midrule
+DA-MUSIC (seed 0) & 4.417 [4.351, 4.485] & -- & $<10^{-4}$ \\
+ESPRIT & 1.406 [1.268, 1.552] & -- & $<10^{-4}$ \\
+Root-MUSIC & 1.532 [1.377, 1.694] & -- & $<10^{-4}$ \\
+MUSIC & 2.721 [2.492, 2.954] & -- & $<10^{-4}$ \\
+\hline
+\end{tabular}
+\par\smallskip\parbox{0.95\textwidth}{\footnotesize Learned models: mean (standard deviation) over three training seeds; other methods: 95\% bootstrap confidence interval. 5,000 test samples. $p$: two-sided Wilcoxon signed-rank test on the per-sample errors.}
+\end{table}

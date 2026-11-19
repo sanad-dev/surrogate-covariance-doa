@@ -45,7 +45,7 @@ from sklearn.model_selection import train_test_split
 from src.utils import *
 from src.criterions import *
 from src.system_model import SystemModel, SystemModelParams
-from src.models import SubspaceNet, DeepCNN, DeepAugmentedMUSIC, ModelGenerator
+from src.models import SubspaceNet, SubspaceNetAttn, SubspaceNetIter, DeepCNN, DeepAugmentedMUSIC, ModelGenerator
 from src.evaluation import evaluate_dnn_model
 
 
@@ -143,6 +143,36 @@ class TrainingParams(object):
                 )
             elif self.model_type.startswith("DeepCNN"):
                 model = DeepCNN(N=system_model.params.N, grid_size=361)
+            elif self.model_type.startswith("SubspaceNetAttn"):
+                # NOTE: must be checked before the generic "SubspaceNet" branch,
+                # since "SubspaceNetAttn".startswith("SubspaceNet") is also True.
+                if not isinstance(tau, int):
+                    raise ValueError(
+                        "TrainingParams.set_model: tau parameter must be provided for SubspaceNetAttn model"
+                    )
+                self.tau = tau
+                self.diff_method = diff_method
+                model = SubspaceNetAttn(
+                    tau=tau,
+                    N=system_model.params.N,
+                    M=system_model.params.M,
+                    diff_method=diff_method,
+                )
+            elif self.model_type.startswith("SubspaceNetIter"):
+                # NOTE: must be checked before the generic "SubspaceNet" branch,
+                # since "SubspaceNetIter".startswith("SubspaceNet") is also True.
+                if not isinstance(tau, int):
+                    raise ValueError(
+                        "TrainingParams.set_model: tau parameter must be provided for SubspaceNetIter model"
+                    )
+                self.tau = tau
+                self.diff_method = diff_method
+                model = SubspaceNetIter(
+                    tau=tau,
+                    N=system_model.params.N,
+                    M=system_model.params.M,
+                    diff_method=diff_method,
+                )
             elif self.model_type.startswith("SubspaceNet"):
                 if not isinstance(tau, int):
                     raise ValueError(
@@ -257,6 +287,31 @@ class TrainingParams(object):
             self.criterion = nn.BCELoss()
         else:
             self.criterion = RMSPELoss()
+        # Default: no structural regularization (identical to original behavior)
+        if not hasattr(self, "toeplitz_weight"):
+            self.toeplitz_weight = 0.0
+        return self
+
+    def set_toeplitz_regularization(self, weight: float = 0.1):
+        """
+        Enables the Hermitian-Toeplitz structural regularization term
+        (see criterions.ToeplitzRegLoss), added on top of the angular loss:
+            total_loss = angular_loss + weight * toeplitz_loss(Rz)
+
+        Only meaningful for SubspaceNet-family models, since only those
+        return a surrogate covariance matrix Rz. Passing weight=0 disables it
+        (equivalent to not calling this method at all).
+
+        Args
+        ----
+        - weight (float): scalar multiplier for the Toeplitz regularization term.
+
+        Returns
+        -------
+        self
+        """
+        self.toeplitz_weight = weight
+        self.toeplitz_criterion = ToeplitzRegLoss()
         return self
 
     def set_training_dataset(self, train_dataset: list):
@@ -272,8 +327,9 @@ class TrainingParams(object):
         self
         """
         # Divide into training and validation datasets
+        # Fixed split: every seed sees the same training and validation data
         train_dataset, valid_dataset = train_test_split(
-            train_dataset, test_size=0.1, shuffle=True
+            train_dataset, test_size=0.1, shuffle=True, random_state=0
         )
         print("Training DataSet size", len(train_dataset))
         print("Validation DataSet size", len(valid_dataset))
@@ -281,8 +337,9 @@ class TrainingParams(object):
         self.train_dataset = torch.utils.data.DataLoader(
             train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=False
         )
+        # Batched validation: losses are summed (RMSPE) or rescaled (BCE) per sample
         self.valid_dataset = torch.utils.data.DataLoader(
-            valid_dataset, batch_size=1, shuffle=False, drop_last=False
+            valid_dataset, batch_size=256, shuffle=False, drop_last=False
         )
         return self
 
@@ -292,6 +349,7 @@ def train(
     model_name: str,
     plot_curves: bool = True,
     saving_path: Path = None,
+    seed: int = 42,
 ):
     """
     Wrapper function for training the model.
@@ -314,8 +372,8 @@ def train(
     Exception: If the model type is not defined.
     Exception: If the optimizer type is not defined.
     """
-    # Set the seed for all available random operations
-    set_unified_seed()
+    # Set the seed for all available random operations (batch order, dropout)
+    set_unified_seed(seed)
     # Current date and time
     print("\n----------------------\n")
     now = datetime.now()
@@ -331,7 +389,7 @@ def train(
     # Plot learning and validation loss curves
     if plot_curves:
         plot_learning_curve(
-            list(range(training_parameters.epochs)), loss_train_list, loss_valid_list
+            list(range(len(loss_train_list))), loss_train_list, loss_valid_list
         )
     return model, loss_train_list, loss_valid_list
 
@@ -359,6 +417,9 @@ def train_model(training_params: TrainingParams, model_name: str, checkpoint_pat
     loss_train_list = []
     loss_valid_list = []
     min_valid_loss = np.inf
+    # Early stopping (None = run all epochs) and count of skipped linalg failures
+    patience = getattr(training_params, "patience", None)
+    training_params.linalg_errors = 0
     # Set initial time for start training
     since = time.time()
     print("\n---Start Training Stage ---\n")
@@ -390,11 +451,24 @@ def train_model(training_params: TrainingParams, model_name: str, checkpoint_pat
                 )
             else:
                 train_loss = training_params.criterion(DOA_predictions, DOA)
+            # Optional structural regularization on the surrogate covariance
+            # Rz (SubspaceNet-family models only, disabled by default)
+            if (
+                training_params.model_type.startswith("SubspaceNet")
+                and getattr(training_params, "toeplitz_weight", 0.0) > 0.0
+            ):
+                Rz = model_output[3]
+                toeplitz_loss = training_params.toeplitz_criterion(Rz)
+                train_loss = train_loss + training_params.toeplitz_weight * toeplitz_loss
             # Back-propagation stage
             try:
                 train_loss.backward()
             except RuntimeError:
-                print("linalg error")
+                # Skip this step instead of applying partial gradients; count it
+                training_params.linalg_errors += 1
+                train_length -= DOA.shape[0]
+                model.zero_grad()
+                continue
             # optimizer update
             optimizer.step()
             # reset gradients
@@ -436,8 +510,12 @@ def train_model(training_params: TrainingParams, model_name: str, checkpoint_pat
             # Saving State Dict
             best_model_wts = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), checkpoint_path / model_name)
+        elif patience is not None and epoch - best_epoch >= patience:
+            print(f"Early stopping: no validation improvement for {patience} epochs")
+            break
 
     time_elapsed = time.time() - since
+    print(f"Skipped steps (linalg errors): {training_params.linalg_errors}")
     print("\n--- Training summary ---")
     print(
         "Training complete in {:.0f}m {:.0f}s".format(

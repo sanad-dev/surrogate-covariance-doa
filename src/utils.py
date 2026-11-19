@@ -227,7 +227,7 @@ def get_k_peaks(grid_size: int, k: int, prediction: torch.Tensor):
     """
     angels_grid = torch.linspace(-90, 90, grid_size)
     peaks, peaks_data = scipy.signal.find_peaks(
-        prediction.detach().numpy().flatten(), prominence=0.05, height=0.01
+        prediction.detach().cpu().numpy().flatten(), prominence=0.05, height=0.01
     )
     peaks = peaks[np.argsort(peaks_data["peak_heights"])[::-1]]
     doa_prediction = angels_grid[peaks]
@@ -265,18 +265,9 @@ def gram_diagonal_overload(Kx: torch.Tensor, eps: float, batch_size: int):
     if not isinstance(Kx, torch.Tensor):
         Kx = torch.tensor(Kx)
 
-    Kx_list = []
-    bs_kx = Kx
-    for iter in range(batch_size):
-        K = bs_kx[iter]
-        # Hermitian conjecture
-        Kx_garm = torch.matmul(torch.t(torch.conj(K)), K).to(device)
-        # Diagonal loading
-        eps_addition = (eps * torch.diag(torch.ones(Kx_garm.shape[0]))).to(device)
-        Rz = Kx_garm + eps_addition
-        Kx_list.append(Rz)
-    Kx_Out = torch.stack(Kx_list, dim=0)
-    return Kx_Out
+    # Batched K^H K + eps*I (same result as the former per-sample loop; batch_size unused)
+    Kx_garm = torch.conj(Kx).transpose(-2, -1) @ Kx
+    return Kx_garm + eps * torch.eye(Kx.shape[-1], dtype=Kx_garm.dtype, device=Kx.device)
 
 
 if __name__ == "__main__":

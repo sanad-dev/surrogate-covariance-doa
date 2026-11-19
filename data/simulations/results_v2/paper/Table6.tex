@@ -1,0 +1,19 @@
+\begin{table}[h!]
+\centering
+\small
+\caption{Comparison with the closest related designs.}
+\label{tab:positioning}
+\begin{tabular}{>{\raggedright}p{3.9cm}>{\raggedright}p{2.6cm}>{\raggedright}p{4.6cm}>{\raggedright\arraybackslash}p{3.6cm}}
+\toprule
+Work & Attention / input over & Output $\to$ estimator & Setting \\
+\midrule
+TransMUSIC (Ji et al.) & snapshots & noise subspace $\to$ MUSIC + NN peak finder & non-coherent, 1-bit ADC \\
+Dkhan et al. (2026) & autocorrelation lags & residual correction $dR$ $\to$ Root-MUSIC & THz near field, coherent \\
+SubspaceNet / NF-SubspaceNet & autocorrelation lags (CNN) & surrogate covariance $\to$ (Root-)MUSIC / ESPRIT & far / near field \\
+Zohar \& Shlezinger (2026) & as SubspaceNet & surrogate covariance $\to$ ESPRIT + uncertainty & coherent, few snapshots \\
+Barthelme \& Utschick; Jiang et al.; Wu et al. & sample covariance(s) & supervised covariance reconstruction $\to$ MUSIC & subarrays, coupling, sparse arrays \\
+Thattukolla (2026); Yeganegi et al. (2024) & covariance / one-bit data & unrolled sparse recovery (LISTA) & coupling, one-bit \\
+\textbf{Attn / Iter (this work)} & autocorrelation lags & full surrogate $K^HK+\epsilon I$ $\to$ differentiable ESPRIT & far field, spacing error, coherent, few snapshots \\
+\hline
+\end{tabular}
+\end{table}

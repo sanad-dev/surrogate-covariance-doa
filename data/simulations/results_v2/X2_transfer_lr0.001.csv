@@ -1,0 +1,121 @@
+experiment,model,trained_through,seed,estimator,mean_deg,fail_rate
+E10,SubspaceNet,esprit,0,native (esprit),5.27837123268577,0.0
+E10,SubspaceNet,esprit,0,ESPRIT,5.2783713123521805,0.0
+E10,SubspaceNet,esprit,0,R-MUSIC,8.221393775304728,0.0
+E10,SubspaceNet,esprit,0,MUSIC,12.772658415473988,0.0772
+E10,SubspaceNet,esprit,1,native (esprit),5.285302627210311,0.0
+E10,SubspaceNet,esprit,1,ESPRIT,5.285302499892683,0.0
+E10,SubspaceNet,esprit,1,R-MUSIC,6.438773889575788,0.0
+E10,SubspaceNet,esprit,1,MUSIC,12.86067400234841,0.039
+E10,SubspaceNet,esprit,2,native (esprit),5.266115680484055,0.0
+E10,SubspaceNet,esprit,2,ESPRIT,5.2661161706584965,0.0
+E10,SubspaceNet,esprit,2,R-MUSIC,6.309090567432656,0.0
+E10,SubspaceNet,esprit,2,MUSIC,12.672655869498737,0.0638
+E10,SubspaceNetAttn,esprit,0,native (esprit),5.269396029669836,0.0
+E10,SubspaceNetAttn,esprit,0,ESPRIT,5.269395865881652,0.0
+E10,SubspaceNetAttn,esprit,0,R-MUSIC,10.051172804008363,0.0
+E10,SubspaceNetAttn,esprit,0,MUSIC,15.465343357156403,0.003
+E10,SubspaceNetAttn,esprit,1,native (esprit),5.197317550834805,0.0
+E10,SubspaceNetAttn,esprit,1,ESPRIT,5.197318264979779,0.0
+E10,SubspaceNetAttn,esprit,1,R-MUSIC,9.146833084815421,0.0
+E10,SubspaceNetAttn,esprit,1,MUSIC,13.610814139906308,0.0162
+E10,SubspaceNetAttn,esprit,2,native (esprit),5.260277704035323,0.0
+E10,SubspaceNetAttn,esprit,2,ESPRIT,5.2602781881869705,0.0
+E10,SubspaceNetAttn,esprit,2,R-MUSIC,9.783196213978194,0.0
+E10,SubspaceNetAttn,esprit,2,MUSIC,14.199770090822254,0.0058
+E10,SubspaceNetIter,esprit,0,native (esprit),5.21314780442293,0.0
+E10,SubspaceNetIter,esprit,0,ESPRIT,5.213148305550023,0.0
+E10,SubspaceNetIter,esprit,0,R-MUSIC,11.45341824663514,0.0
+E10,SubspaceNetIter,esprit,0,MUSIC,12.740337378576932,0.0
+E10,SubspaceNetIter,esprit,1,native (esprit),5.221297157649738,0.0
+E10,SubspaceNetIter,esprit,1,ESPRIT,5.221297157980194,0.0
+E10,SubspaceNetIter,esprit,1,R-MUSIC,8.171124806152534,0.0
+E10,SubspaceNetIter,esprit,1,MUSIC,15.687725025096567,0.0002
+E10,SubspaceNetIter,esprit,2,native (esprit),5.1979567860663245,0.0
+E10,SubspaceNetIter,esprit,2,ESPRIT,5.197956604631133,0.0
+E10,SubspaceNetIter,esprit,2,R-MUSIC,9.526889882516366,0.0
+E10,SubspaceNetIter,esprit,2,MUSIC,15.434347208351847,0.0056
+E10,SubspaceNet,root_music,0,native (root_music),7.905007191708307,0.0
+E10,SubspaceNet,root_music,0,ESPRIT,7.232052624317468,0.0
+E10,SubspaceNet,root_music,0,R-MUSIC,7.905007482047828,0.0
+E10,SubspaceNet,root_music,0,MUSIC,13.095579376975769,0.004
+E10,SubspaceNet,root_music,1,native (root_music),6.164754799907464,0.0
+E10,SubspaceNet,root_music,1,ESPRIT,6.0205479538968945,0.0
+E10,SubspaceNet,root_music,1,R-MUSIC,6.164754743251828,0.0
+E10,SubspaceNet,root_music,1,MUSIC,13.078418946562095,0.0004
+E10,SubspaceNet,root_music,2,native (root_music),9.127286086868407,0.0
+E10,SubspaceNet,root_music,2,ESPRIT,7.258051289617809,0.0
+E10,SubspaceNet,root_music,2,R-MUSIC,9.127282607459465,0.0
+E10,SubspaceNet,root_music,2,MUSIC,13.411483526466908,0.0006
+E10,SubspaceNetAttn/mlp48,esprit,0,native (esprit),5.2043003170876965,0.0
+E10,SubspaceNetAttn/mlp48,esprit,0,ESPRIT,5.204302097395694,0.0
+E10,SubspaceNetAttn/mlp48,esprit,0,R-MUSIC,7.73301085521632,0.0
+E10,SubspaceNetAttn/mlp48,esprit,0,MUSIC,15.666077449825929,0.034
+E10,SubspaceNetAttn/mlp48,esprit,1,native (esprit),5.166459354724167,0.0
+E10,SubspaceNetAttn/mlp48,esprit,1,ESPRIT,5.166459444191967,0.0
+E10,SubspaceNetAttn/mlp48,esprit,1,R-MUSIC,9.95163627397133,0.0
+E10,SubspaceNetAttn/mlp48,esprit,1,MUSIC,14.611129880018773,0.0054
+E10,SubspaceNetAttn/mlp48,esprit,2,native (esprit),5.15738947814249,0.0
+E10,SubspaceNetAttn/mlp48,esprit,2,ESPRIT,5.157390168470025,0.0
+E10,SubspaceNetAttn/mlp48,esprit,2,R-MUSIC,6.068224411841715,0.0
+E10,SubspaceNetAttn/mlp48,esprit,2,MUSIC,13.563015294898323,0.0038
+E12,SubspaceNet,esprit,0,native (esprit),3.943584576174232,0.0
+E12,SubspaceNet,esprit,0,ESPRIT,3.943584268502451,0.0
+E12,SubspaceNet,esprit,0,R-MUSIC,7.057307610909281,0.0
+E12,SubspaceNet,esprit,0,MUSIC,11.56410600853718,0.0768
+E12,SubspaceNet,esprit,1,native (esprit),3.847577911289455,0.0
+E12,SubspaceNet,esprit,1,ESPRIT,3.847577739181296,0.0
+E12,SubspaceNet,esprit,1,R-MUSIC,4.60448752930663,0.0
+E12,SubspaceNet,esprit,1,MUSIC,11.690790239914609,0.0366
+E12,SubspaceNet,esprit,2,native (esprit),3.7502188380420636,0.0
+E12,SubspaceNet,esprit,2,ESPRIT,3.750218419464716,0.0
+E12,SubspaceNet,esprit,2,R-MUSIC,4.450352656273486,0.0
+E12,SubspaceNet,esprit,2,MUSIC,11.334386147330152,0.0604
+E12,SubspaceNetAttn,esprit,0,native (esprit),3.843992564939809,0.0
+E12,SubspaceNetAttn,esprit,0,ESPRIT,3.843992738816766,0.0
+E12,SubspaceNetAttn,esprit,0,R-MUSIC,9.241488419224341,0.0
+E12,SubspaceNetAttn,esprit,0,MUSIC,14.363562779856686,0.0016
+E12,SubspaceNetAttn,esprit,1,native (esprit),3.7506951210595547,0.0
+E12,SubspaceNetAttn,esprit,1,ESPRIT,3.7506960191555923,0.0
+E12,SubspaceNetAttn,esprit,1,R-MUSIC,8.202552046686,0.0
+E12,SubspaceNetAttn,esprit,1,MUSIC,12.483674621553522,0.0118
+E12,SubspaceNetAttn,esprit,2,native (esprit),3.885880888339404,0.0
+E12,SubspaceNetAttn,esprit,2,ESPRIT,3.885879879207191,0.0
+E12,SubspaceNetAttn,esprit,2,R-MUSIC,8.81727559725535,0.0
+E12,SubspaceNetAttn,esprit,2,MUSIC,12.574292088911655,0.003
+E12,SubspaceNetIter,esprit,0,native (esprit),3.76261386556661,0.0
+E12,SubspaceNetIter,esprit,0,ESPRIT,3.762612630891427,0.0
+E12,SubspaceNetIter,esprit,0,R-MUSIC,11.0136104869913,0.0
+E12,SubspaceNetIter,esprit,0,MUSIC,12.318234487623293,0.0
+E12,SubspaceNetIter,esprit,1,native (esprit),3.9353752754549327,0.0
+E12,SubspaceNetIter,esprit,1,ESPRIT,3.935375361399162,0.0
+E12,SubspaceNetIter,esprit,1,R-MUSIC,6.567588101635037,0.0
+E12,SubspaceNetIter,esprit,1,MUSIC,14.310658819738567,0.0002
+E12,SubspaceNetIter,esprit,2,native (esprit),4.026240460643898,0.0
+E12,SubspaceNetIter,esprit,2,ESPRIT,4.026239804351655,0.0
+E12,SubspaceNetIter,esprit,2,R-MUSIC,8.73412554779997,0.0
+E12,SubspaceNetIter,esprit,2,MUSIC,13.995909844249017,0.0046
+E12,SubspaceNet,root_music,0,native (root_music),6.159127409893592,0.0
+E12,SubspaceNet,root_music,0,ESPRIT,5.422287363226895,0.0
+E12,SubspaceNet,root_music,0,R-MUSIC,6.1591270620023035,0.0
+E12,SubspaceNet,root_music,0,MUSIC,11.935573931413881,0.0042
+E12,SubspaceNet,root_music,1,native (root_music),4.301678163567223,0.0
+E12,SubspaceNet,root_music,1,ESPRIT,4.143639842083582,0.0
+E12,SubspaceNet,root_music,1,R-MUSIC,4.3016810121181095,0.0
+E12,SubspaceNet,root_music,1,MUSIC,11.674577886058762,0.0
+E12,SubspaceNet,root_music,2,native (root_music),8.161070791510568,0.0
+E12,SubspaceNet,root_music,2,ESPRIT,6.266875792212391,0.0
+E12,SubspaceNet,root_music,2,R-MUSIC,8.161071859833555,0.0
+E12,SubspaceNet,root_music,2,MUSIC,12.974980336750804,0.0014
+E12,SubspaceNetAttn/mlp48,esprit,0,native (esprit),3.7861296510370863,0.0
+E12,SubspaceNetAttn/mlp48,esprit,0,ESPRIT,3.7861297067518294,0.0
+E12,SubspaceNetAttn/mlp48,esprit,0,R-MUSIC,6.318540797244499,0.0
+E12,SubspaceNetAttn/mlp48,esprit,0,MUSIC,14.357601184451335,0.0314
+E12,SubspaceNetAttn/mlp48,esprit,1,native (esprit),3.789401233863242,0.0
+E12,SubspaceNetAttn/mlp48,esprit,1,ESPRIT,3.789401618480993,0.0
+E12,SubspaceNetAttn/mlp48,esprit,1,R-MUSIC,9.010942076757154,0.0
+E12,SubspaceNetAttn/mlp48,esprit,1,MUSIC,12.996993148760097,0.0034
+E12,SubspaceNetAttn/mlp48,esprit,2,native (esprit),3.698727922163903,0.0
+E12,SubspaceNetAttn/mlp48,esprit,2,ESPRIT,3.6987278373552295,0.0
+E12,SubspaceNetAttn/mlp48,esprit,2,R-MUSIC,4.491412603768103,0.0
+E12,SubspaceNetAttn/mlp48,esprit,2,MUSIC,12.106960595727795,0.0048

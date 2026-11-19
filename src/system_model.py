@@ -50,6 +50,8 @@ class SystemModelParams:
     eta = 0  # Sensor location deviation
     bias = 0  # Sensor bias deviation
     sv_noise_var = 0  # Steering vector added noise variance
+    source_power_db = None  # Per-source power offsets in dB (None = equal powers)
+    array_positions = None  # Sensor positions in half wavelengths (None = uniform linear array 0..N-1)
 
     def set_parameter(self, name: str, value):
         """
@@ -97,6 +99,18 @@ class SystemModel(object):
         self.define_scenario_params()
         # Define array indices
         self.create_array()
+        # Nominal geometry until draw_array_realization() is called
+        self.uniform_bias, self.mis_distance = 0, 0
+
+    def draw_array_realization(self):
+        """Draws one array geometry (common spacing bias and per-sensor deviation),
+        shared by all sources of a sample. Call once per sample, before building A."""
+        self.uniform_bias = np.random.uniform(
+            low=-1 * self.params.bias, high=self.params.bias, size=1
+        )
+        self.mis_distance = np.random.uniform(
+            low=-1 * self.params.eta, high=self.params.eta, size=self.params.N
+        )
 
     def define_scenario_params(self):
         """Defines the signal type parameters based on the specified frequency values."""
@@ -137,6 +151,9 @@ class SystemModel(object):
     def create_array(self):
         """create an array of sensors locations"""
         self.array = np.linspace(0, self.params.N, self.params.N, endpoint=False)
+        if self.params.array_positions is not None:  # non-uniform linear array (X9)
+            assert len(self.params.array_positions) == self.params.N
+            self.array = np.asarray(self.params.array_positions, dtype=float)
 
     def steering_vec(
         self, theta: np.ndarray, f: float = 1, array_form="ULA", nominal=False
@@ -157,23 +174,16 @@ class SystemModel(object):
         """
         f_sv = {"NarrowBand": 1, "Broadband": f}
         if array_form.startswith("ULA"):
-            # define uniform deviation in spacing (for each sensor)
             if not nominal:
-                # Calculate uniform bias for sensors locations
-                uniform_bias = np.random.uniform(
-                    low=-1 * self.params.bias, high=self.params.bias, size=1
-                )
-                # Calculate non-uniform bias for each pair of sensors
-                mis_distance = np.random.uniform(
-                    low=-1 * self.params.eta, high=self.params.eta, size=self.params.N
-                )
-                # Calculate additional steering vector noise
-                mis_geometry_noise = np.sqrt(self.params.sv_noise_var) * (
-                    np.random.randn(self.params.N)
+                # Array geometry of the current sample (see draw_array_realization)
+                uniform_bias, mis_distance = self.uniform_bias, self.mis_distance
+                # Angle-dependent manifold error: complex Gaussian, drawn per steering vector
+                mis_geometry_noise = np.sqrt(self.params.sv_noise_var / 2) * (
+                    np.random.randn(self.params.N) + 1j * np.random.randn(self.params.N)
                 )
             # If calculation is applied through method (array mismatches are not known).
             else:
-                mis_distance, mis_geometry_noise = 0, 0
+                uniform_bias, mis_distance, mis_geometry_noise = 0, 0, 0
 
             return (
                 np.exp(

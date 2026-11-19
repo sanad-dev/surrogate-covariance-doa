@@ -1,0 +1,18 @@
+\begin{table}[h!]
+\centering
+\small
+\caption{Transfer of the learned covariances to other estimators (E10, seed 0).}
+\label{tab:pnp}
+\begin{tabular}{llll}
+\toprule
+Covariance & ESPRIT & Root-MUSIC & MUSIC \\
+\midrule
+Iter (proposed) & 5.213 & 11.453 & 12.740 \\
+Attn (proposed) & 5.269 & 10.051 & 15.469 (0.3\%) \\
+SubspaceNet & 5.278 & 8.221 & 12.726 (7.7\%) \\
+\midrule
+Sample covariance & 7.277 & 7.437 & 8.329 \\
+\hline
+\end{tabular}
+\par\smallskip\parbox{0.95\textwidth}{\footnotesize Mean RMSPE [$^\circ$]. In parentheses: share of samples in which MUSIC misses a peak, when nonzero. All learned models were trained through ESPRIT.}
+\end{table}

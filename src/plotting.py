@@ -134,7 +134,7 @@ def plot_mvdr_spectrum(system_model, figures: dict, spectrum: np.ndarray,
     # Plot normalized mvdr beam pattern
     figures["mvdr"]["ax"].plot(mvdr._angels , spectrum / np.max(spectrum), label=algorithm)
     # marker in "x" true DoA's
-    for doa in true_DOA[0]:
+    for doa in true_DOA[0].cpu():
       figures["mvdr"]["ax"].plot([doa * np.pi / 180], [1], marker='x', color="r", markersize=14)
     # Set leagend
     figures["mvdr"]["ax"].legend()
@@ -167,7 +167,7 @@ def plot_root_music_spectrum(roots: np.ndarray, predictions: np.ndarray,
       ax.set_ylim([0, 1.2])
       ax.set_yticks([0, 1])
       ax.plot([0, angle * np.pi / 180], [0, r], marker='o')
-    for doa in true_DOA:
+    for doa in true_DOA.cpu():
       ax.plot([doa * np.pi / 180], [1], marker='x', color="r", markersize=14)
     ax.set_xlabel("Angels [deg]")
     ax.set_ylabel("Amplitude")

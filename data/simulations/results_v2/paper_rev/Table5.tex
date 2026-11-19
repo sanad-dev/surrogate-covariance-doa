@@ -1,0 +1,22 @@
+\begin{table}[h!]
+\centering
+\small
+\caption{Model size and per-sample latency (E13).}
+\label{tab:complexity}
+\begin{tabular}{lrrr}
+\toprule
+Method & Parameters & GPU [ms] & CPU [ms] \\
+\midrule
+SubspaceNet-FC (proposed) & 40,400 & 2.708 & 0.926 \\
+Iter (lag variant) & 346,624 & 5.439 & 4.568 \\
+Attn (lag variant) & 612,224 & 3.913 & 3.230 \\
+SubspaceNet & 41,761 & 3.089 & 1.484 \\
+DA-MUSIC & 10,323 & 1.707 & 7.611 \\
+\midrule
+ESPRIT & -- & -- & 0.221 \\
+Root-MUSIC & -- & -- & 0.355 \\
+MUSIC & -- & -- & 12.249 \\
+\hline
+\end{tabular}
+\par\smallskip\parbox{0.95\textwidth}{\footnotesize Latency at batch size 1. The classical methods were timed on CPU only.}
+\end{table}

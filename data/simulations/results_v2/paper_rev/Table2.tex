@@ -1,0 +1,25 @@
+\begin{table}[h!]
+\centering
+\small
+\caption{Base point (E10) and Toeplitz ablation (E11).}
+\label{tab:e10}
+\begin{tabular}{llll}
+\toprule
+Method & RMSPE [$^\circ$] & Seeds 0 / 1 / 2 [$^\circ$] & $p$ vs.\ SubspaceNet (seed 0) \\
+\midrule
+SubspaceNet-FC (proposed) & 5.176 (0.020) & 5.204 / 5.166 / 5.157 & $<10^{-4}$ / $<10^{-4}$ / $<10^{-4}$ \\
+Iter (lag variant) & 5.211 (0.010) & 5.213 / 5.221 / 5.198 & 0.00136 / 0.0232 / $<10^{-4}$ \\
+Iter (lag variant) + Toeplitz & 5.222 (0.007) & 5.217 / 5.232 / 5.217 & 0.00571 / 0.053 / 0.000752 \\
+Attn (lag variant) & 5.242 (0.032) & 5.269 / 5.197 / 5.260 & 0.305 / 0.000263 / 0.269 \\
+Attn (lag variant) + Toeplitz & 5.271 (0.020) & 5.269 / 5.247 / 5.296 & 0.446 / 0.226 / 0.698 \\
+SubspaceNet & 5.277 (0.008) & 5.278 / 5.285 / 5.266 & -- / 0.729 / 0.652 \\
+SubspaceNet + Toeplitz & 5.384 (0.017) & 5.403 / 5.387 / 5.362 & $<10^{-4}$ / $<10^{-4}$ / $<10^{-4}$ \\
+\midrule
+DA-MUSIC (seed 0) & 5.864 [5.756, 5.971] & -- & $<10^{-4}$ \\
+ESPRIT & 7.277 [7.112, 7.444] & -- & $<10^{-4}$ \\
+Root-MUSIC & 7.437 [7.264, 7.613] & -- & $<10^{-4}$ \\
+MUSIC & 8.329 [8.110, 8.542] & -- & $<10^{-4}$ \\
+\hline
+\end{tabular}
+\par\smallskip\parbox{0.95\textwidth}{\footnotesize Learned models: mean (standard deviation) over three training seeds; other methods: 95\% bootstrap confidence interval. 5,000 test samples. $p$: two-sided Wilcoxon signed-rank test on the per-sample errors.}
+\end{table}

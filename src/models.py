@@ -63,6 +63,7 @@ class ModelGenerator(object):
         self.model_type = None
         self.diff_method = None
         self.tau = None
+        self.variant = {}  # constructor overrides for the module ablations (SubspaceNetAttn / SubspaceNetIter)
 
     def set_tau(self, tau: int = None):
         """
@@ -147,6 +148,26 @@ class ModelGenerator(object):
             )
         elif self.model_type.startswith("DeepCNN"):
             self.model = DeepCNN(N=system_model_params.N, grid_size=361)
+        elif self.model_type.startswith("SubspaceNetAttn"):
+            # NOTE: must be checked before the generic "SubspaceNet" branch,
+            # since "SubspaceNetAttn".startswith("SubspaceNet") is also True.
+            self.model = SubspaceNetAttn(
+                tau=self.tau,
+                N=system_model_params.N,
+                M=system_model_params.M,
+                diff_method=self.diff_method,
+                **self.variant,
+            )
+        elif self.model_type.startswith("SubspaceNetIter"):
+            # NOTE: must be checked before the generic "SubspaceNet" branch,
+            # since "SubspaceNetIter".startswith("SubspaceNet") is also True.
+            self.model = SubspaceNetIter(
+                tau=self.tau,
+                N=system_model_params.N,
+                M=system_model_params.M,
+                diff_method=self.diff_method,
+                **self.variant,
+            )
         elif self.model_type.startswith("SubspaceNet"):
             self.model = SubspaceNet(
                 tau=self.tau, M=system_model_params.M, diff_method=self.diff_method
@@ -399,6 +420,443 @@ class SubspaceNet(nn.Module):
         return doa_prediction, doa_all_predictions, roots, Rz
 
 
+class SubspaceNetAttn(nn.Module):
+    """SubspaceNetAttn is an original variant of SubspaceNet that replaces the
+    stacked-convolution encoder with a Transformer-style self-attention
+    mechanism across the tau auto-correlation lags.
+
+    Motivation
+    ----------
+    In the original SubspaceNet, the tau lag matrices are stacked as input
+    *channels* to a 2D CNN (`nn.Conv2d(self.tau, 16, kernel_size=2)`). This
+    means the network can only combine lags through local, fixed convolution
+    kernels stacked over several layers -- there is no explicit mechanism for
+    one lag to directly attend to a distant, non-adjacent lag.
+
+    SubspaceNetAttn instead treats each lag matrix Rx_tau[:, k] as a single
+    token, embeds it, and lets all tau tokens attend to each other via
+    multi-head self-attention before pooling them into a single context
+    vector that is decoded into the surrogate covariance matrix. This allows
+    the network to learn which combinations of lags (not necessarily
+    adjacent ones) are most informative for a given scenario (e.g. coherent
+    sources, low SNR, few snapshots).
+
+    The output signature is identical to SubspaceNet's
+    (doa_prediction, doa_all_predictions, roots, Rz), so it plugs directly
+    into the existing training/evaluation pipeline (any code that checks
+    `model_type.startswith("SubspaceNet")` also matches "SubspaceNetAttn").
+
+    Attributes:
+    -----------
+        M (int): Number of sources.
+        tau (int): Number of auto-correlation lags.
+        N (int): Number of array sensors.
+        lag_embed (nn.Sequential): Per-lag embedding MLP.
+        pos_embedding (nn.Parameter): Learnable positional embedding per lag.
+        transformer (nn.TransformerEncoder): Self-attention across lags.
+        pool_attn (nn.MultiheadAttention): Learned attention-pooling over lags.
+        recon_head (nn.Sequential): MLP decoder reconstructing the NxN
+            surrogate covariance (real & imaginary parts).
+
+    Methods:
+    --------
+        forward(Rx_tau): Performs the forward pass of SubspaceNetAttn.
+
+    """
+
+    def __init__(
+        self,
+        tau: int,
+        N: int,
+        M: int,
+        diff_method: str = "esprit",
+        d_model: int = 128,
+        nhead: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.2,
+        use_pos: bool = True,
+        pool: str = "attn",
+        output: str = "full",
+    ):
+        """Initializes the SubspaceNetAttn model.
+
+        Ablation switches (defaults = the full model): num_layers=0 removes the
+        Transformer layers, use_pos=False the positional embedding, pool="mean"
+        replaces the attention pooling by a mean over the lag tokens.
+        output: "full" predicts the whole surrogate covariance K^H K + I; "res_psd" and
+        "res_herm" add a correction to the lag-0 sample covariance instead (X6, reviewer 2, M2):
+        the same positive-definite K^H K + I, or the Hermitian part of K.
+
+        Args:
+        -----
+            tau (int): Number of auto-correlation lags.
+            N (int): Number of array sensors.
+            M (int): Number of sources.
+            diff_method (str): differentiable subspace method, "root_music" or "esprit".
+            d_model (int): embedding dimension used by the attention block.
+            nhead (int): number of attention heads.
+            num_layers (int): number of stacked Transformer encoder layers.
+            dropout (float): dropout probability.
+        """
+        super(SubspaceNetAttn, self).__init__()
+        self.M = M
+        self.tau = tau
+        self.N = N
+        self.d_model = d_model
+
+        # Per-lag embedding: each lag matrix Rx_tau[:, k] has shape [2N, N],
+        # flattened and projected into a d_model-dim token.
+        input_dim = 2 * N * N
+        self.lag_embed = nn.Sequential(
+            nn.Linear(input_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+        )
+        # Learnable positional embedding: lag order carries physical meaning
+        # (larger tau = larger delay), so unlike a typical NLP transformer we
+        # don't want a permutation-invariant treatment of lags.
+        self.pos_embedding = nn.Parameter(torch.randn(1, tau, d_model) * 0.02) if use_pos else None
+
+        if num_layers:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=nhead,
+                dim_feedforward=4 * d_model,
+                dropout=dropout,
+                batch_first=True,
+            )
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        else:
+            self.transformer = nn.Identity()
+
+        # Attention pooling: a learned query attends over the tau contextualized
+        # lag tokens to produce a single summary vector (instead of e.g. a
+        # naive mean, letting the network weigh informative lags more).
+        self.pool = pool
+        assert output in ("full", "res_psd", "res_herm"), output
+        self.output = output
+        if pool == "attn":
+            self.pool_query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+            self.pool_attn = nn.MultiheadAttention(
+                embed_dim=d_model, num_heads=nhead, batch_first=True
+            )
+
+        # Reconstruction head: decodes the pooled context vector into the
+        # real & imaginary parts of the NxN surrogate covariance matrix.
+        self.recon_head = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, 2 * N * N),
+        )
+
+        # Set the subspace method for training (reuses SubspaceNet's logic)
+        self.set_diff_method(diff_method)
+
+    def set_diff_method(self, diff_method: str):
+        """Sets the differentiable subspace method for training SubspaceNetAttn.
+            Options: "root_music", "esprit"
+
+        Args:
+        -----
+            diff_method (str): differentiable subspace method.
+
+        Raises:
+        -------
+            Exception: Method diff_method is not defined for SubspaceNetAttn
+        """
+        if diff_method.startswith("root_music"):
+            self.diff_method = root_music
+        elif diff_method.startswith("esprit"):
+            self.diff_method = esprit
+        else:
+            raise Exception(
+                f"SubspaceNetAttn.set_diff_method: Method {diff_method} is not defined for SubspaceNetAttn"
+            )
+
+    def forward(self, Rx_tau: torch.Tensor):
+        """
+        Performs the forward pass of SubspaceNetAttn.
+
+        Args:
+        -----
+            Rx_tau (torch.Tensor): Input tensor of shape [Batch size, tau, 2N, N].
+
+        Returns:
+        --------
+            doa_prediction (torch.Tensor): The predicted direction-of-arrival (DOA) for each batch sample.
+            doa_all_predictions (torch.Tensor): All DOA predictions for each root, over all batches.
+            roots_to_return (torch.Tensor): The unsorted roots.
+            Rz (torch.Tensor): Surrogate covariance matrix.
+
+        """
+        batch_size = Rx_tau.shape[0]
+        # Flatten each lag matrix into a token: [B, tau, 2N*N]
+        tokens = Rx_tau.reshape(batch_size, self.tau, -1)
+        tokens = self.lag_embed(tokens)  # [B, tau, d_model]
+        if self.pos_embedding is not None:
+            tokens = tokens + self.pos_embedding
+        # Self-attention across all tau lags jointly (global, non-local mixing)
+        tokens = self.transformer(tokens)  # [B, tau, d_model]
+        # Attention-pool the tau tokens into a single context vector
+        if self.pool == "attn":
+            query = self.pool_query.expand(batch_size, -1, -1)  # [B, 1, d_model]
+            pooled, _ = self.pool_attn(query, tokens, tokens)  # [B, 1, d_model]
+            pooled = pooled.squeeze(1)  # [B, d_model]
+        else:
+            pooled = tokens.mean(dim=1)
+        # Decode into the surrogate covariance matrix
+        out = self.recon_head(pooled)  # [B, 2*N*N]
+        out = out.view(batch_size, 2, self.N, self.N)
+        Rx_real = out[:, 0]  # [B, N, N]
+        Rx_imag = out[:, 1]  # [B, N, N]
+        Kx_tag = torch.complex(Rx_real, Rx_imag)  # [B, N, N]
+        if self.output == "res_herm":
+            Rz = (Kx_tag + Kx_tag.conj().transpose(1, 2)) / 2
+        else:
+            # Apply Gram operation + diagonal loading -> valid Hermitian PSD matrix
+            Rz = gram_diagonal_overload(Kx=Kx_tag, eps=1, batch_size=batch_size)
+        if self.output != "full":
+            # Residual output: the network output corrects the lag-0 sample covariance
+            R0 = torch.complex(Rx_tau[:, 0, : self.N], Rx_tau[:, 0, self.N :])
+            Rz = Rz + (R0 + R0.conj().transpose(1, 2)) / 2
+        # Feed surrogate covariance to the differentiable subspace algorithm
+        method_output = self.diff_method(Rz, self.M, batch_size)
+        if isinstance(method_output, tuple):
+            # Root MUSIC output
+            doa_prediction, doa_all_predictions, roots = method_output
+        else:
+            # Esprit output
+            doa_prediction = method_output
+            doa_all_predictions, roots = None, None
+        return doa_prediction, doa_all_predictions, roots, Rz
+
+
+class SubspaceNetIter(nn.Module):
+    """SubspaceNetIter is an original variant of SubspaceNet based on
+    *deep unfolding* / recurrent iterative refinement, rather than a
+    single-shot encoder-decoder (SubspaceNet) or attention-based encoder
+    (SubspaceNetAttn).
+
+    Motivation
+    ----------
+    Every existing surrogate-covariance architecture for this problem --
+    the original SubspaceNet autoencoder, attention-based variants such as
+    SubspaceNetAttn, and other related-work designs (e.g. CNN-only, RNN
+    architectures like DA-MUSIC, Toeplitz-prior autoencoders) -- computes
+    the surrogate covariance in a *single forward pass*: raw features in,
+    final covariance out. None of them iteratively refine an initial
+    estimate over multiple steps.
+
+    SubspaceNetIter instead borrows the "deep unfolding" idea, well
+    established in other inverse-problem settings (e.g. compressed
+    sensing, image restoration), but not previously applied to the
+    surrogate-covariance estimation problem for DoA. It:
+      1. Embeds each of the tau lag matrices individually (full detail
+         preserved per lag, as in SubspaceNetAttn).
+      2. Produces an initial coarse covariance estimate from a simple
+         mean-pooled summary of the lag tokens.
+      3. Refines this estimate over `n_iterations` steps using a *shared*
+         (weight-tied) recurrent cell. Critically, at every step the
+         module *re-attends* over the lag tokens using the current
+         covariance estimate as a query (cross-attention), rather than
+         reusing one fixed context vector computed once up front --
+         i.e. each refinement step can focus on different lag evidence
+         depending on what the current estimate still gets wrong. This
+         combines SubspaceNetAttn's cross-lag mixing with SubspaceNetIter's
+         iterative-refinement idea in a way neither original architecture
+         does on its own: SubspaceNetAttn attends over lags exactly once
+         before pooling, and the *first* version of SubspaceNetIter used a
+         single fixed context vector reused unchanged at every refinement
+         step (found, by direct comparison, to leave a sizeable performance
+         gap versus SubspaceNetAttn -- see accompanying analysis).
+      4. Reconstructs the surrogate covariance from the final state.
+
+    The output signature matches SubspaceNet's
+    (doa_prediction, doa_all_predictions, roots, Rz), so it plugs directly
+    into the existing training/evaluation pipeline.
+
+    Attributes:
+    -----------
+        M (int): Number of sources.
+        tau (int): Number of auto-correlation lags.
+        N (int): Number of array sensors.
+        n_iterations (int): Number of shared-weight refinement steps.
+        lag_embed (nn.Sequential): Per-lag embedding MLP (full detail per lag).
+        query_proj (nn.Linear): Projects the current covariance state into
+            a query vector used to re-attend over the lag tokens.
+        cross_attn (nn.MultiheadAttention): Query-conditioned cross-attention
+            over the lag tokens, applied fresh at every refinement step.
+        init_head (nn.Linear): Produces the initial coarse covariance estimate.
+        refine_cell (nn.GRUCell): Shared recurrent refinement cell, applied
+            `n_iterations` times (deep-unfolding: weight-tied across steps).
+
+    Methods:
+    --------
+        forward(Rx_tau): Performs the forward pass of SubspaceNetIter.
+
+    """
+
+    def __init__(
+        self,
+        tau: int,
+        N: int,
+        M: int,
+        diff_method: str = "esprit",
+        n_iterations: int = 5,
+        d_ctx: int = 128,
+        n_heads: int = 4,
+        dropout: float = 0.1,
+        context: str = "attn",
+    ):
+        """Initializes the SubspaceNetIter model.
+
+        Ablation switches (defaults = the full model): n_iterations=0 removes the
+        refinement loop, context="mean" replaces the cross-attention by the mean
+        of the lag tokens (same context at every step).
+
+        Args:
+        -----
+            tau (int): Number of auto-correlation lags.
+            N (int): Number of array sensors.
+            M (int): Number of sources.
+            diff_method (str): differentiable subspace method, "root_music" or "esprit".
+            n_iterations (int): number of shared-weight refinement steps.
+            d_ctx (int): dimension of the evidence context vector / attention embedding.
+            n_heads (int): number of attention heads for the iterative cross-attention.
+            dropout (float): dropout probability in the reconstruction head.
+        """
+        super(SubspaceNetIter, self).__init__()
+        self.M = M
+        self.tau = tau
+        self.N = N
+        self.n_iterations = n_iterations
+        self.state_dim = 2 * N * N  # flattened [real;imag] NxN covariance
+
+        # Per-lag embedding: each flattened lag matrix Rx_tau[:, k] (shape
+        # [2N, N]) is projected to a d_ctx-dim token, preserving full detail
+        # per lag (as in SubspaceNetAttn) rather than compressing all lags
+        # together immediately.
+        input_dim = 2 * N * N
+        self.lag_embed = nn.Sequential(
+            nn.Linear(input_dim, d_ctx),
+            nn.LayerNorm(d_ctx),
+            nn.GELU(),
+        )
+
+        # Query-conditioned cross-attention: at every refinement step, the
+        # *current* covariance estimate is projected into a query that
+        # attends over the (fixed) lag tokens, so different steps can pull
+        # different evidence from the lags as the estimate evolves.
+        self.context = context
+        if n_iterations and context == "attn":
+            self.query_proj = nn.Linear(self.state_dim, d_ctx)
+            self.cross_attn = nn.MultiheadAttention(
+                embed_dim=d_ctx, num_heads=n_heads, batch_first=True
+            )
+
+        # Initial coarse covariance estimate from a simple mean-pooled
+        # summary of the lag tokens (the iterative cross-attention refines
+        # this from here on).
+        self.init_head = nn.Linear(d_ctx, self.state_dim)
+
+        # Shared (weight-tied) recurrent refinement cell: repeatedly maps
+        # (re-attended context, current covariance estimate) -> updated
+        # covariance estimate. This is the deep-unfolding step.
+        if n_iterations:
+            self.refine_cell = nn.GRUCell(input_size=d_ctx, hidden_size=self.state_dim)
+
+        # Dedicated reconstruction head applied to the final refined state,
+        # matching SubspaceNetAttn's decoder capacity (previously the GRU
+        # hidden state was reshaped directly into the covariance with no
+        # further non-linear transformation -- this gave the model less
+        # capacity to finalize/clean up the estimate than SubspaceNetAttn's
+        # 2-layer, 4x-expansion decoder).
+        self.recon_head = nn.Sequential(
+            nn.Linear(self.state_dim, 4 * d_ctx),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_ctx, self.state_dim),
+        )
+
+        self.set_diff_method(diff_method)
+
+    def set_diff_method(self, diff_method: str):
+        """Sets the differentiable subspace method for training SubspaceNetIter.
+            Options: "root_music", "esprit"
+
+        Args:
+        -----
+            diff_method (str): differentiable subspace method.
+
+        Raises:
+        -------
+            Exception: Method diff_method is not defined for SubspaceNetIter
+        """
+        if diff_method.startswith("root_music"):
+            self.diff_method = root_music
+        elif diff_method.startswith("esprit"):
+            self.diff_method = esprit
+        else:
+            raise Exception(
+                f"SubspaceNetIter.set_diff_method: Method {diff_method} is not defined for SubspaceNetIter"
+            )
+
+    def forward(self, Rx_tau: torch.Tensor):
+        """
+        Performs the forward pass of SubspaceNetIter.
+
+        Args:
+        -----
+            Rx_tau (torch.Tensor): Input tensor of shape [Batch size, tau, 2N, N].
+
+        Returns:
+        --------
+            doa_prediction (torch.Tensor): The predicted direction-of-arrival (DOA) for each batch sample.
+            doa_all_predictions (torch.Tensor): All DOA predictions for each root, over all batches.
+            roots_to_return (torch.Tensor): The unsorted roots.
+            Rz (torch.Tensor): Surrogate covariance matrix (after the final refinement step).
+
+        """
+        batch_size = Rx_tau.shape[0]
+
+        # Per-lag embedding (full detail per lag, no early compression)
+        tokens = Rx_tau.reshape(batch_size, self.tau, -1)  # [B, tau, 2N*N]
+        tokens = self.lag_embed(tokens)  # [B, tau, d_ctx]
+
+        # Initial coarse estimate from a simple mean-pooled summary
+        state = self.init_head(tokens.mean(dim=1))  # [B, state_dim]
+
+        # Iterative refinement: the query re-attends over the lag tokens
+        # at every step, conditioned on the current state.
+        for _ in range(self.n_iterations):
+            if self.context == "attn":
+                query = self.query_proj(state).unsqueeze(1)  # [B, 1, d_ctx]
+                context, _ = self.cross_attn(query, tokens, tokens)  # [B, 1, d_ctx]
+                context = context.squeeze(1)  # [B, d_ctx]
+            else:
+                context = tokens.mean(dim=1)
+            state = self.refine_cell(context, state)
+
+        # Final reconstruction: a dedicated decoder cleans up/finalizes the
+        # refined state into the covariance representation, instead of
+        # reshaping the raw GRU hidden state directly.
+        out = self.recon_head(state).view(batch_size, 2, self.N, self.N)
+        Rx_real = out[:, 0]
+        Rx_imag = out[:, 1]
+        Kx_tag = torch.complex(Rx_real, Rx_imag)
+        Rz = gram_diagonal_overload(Kx=Kx_tag, eps=1, batch_size=batch_size)
+        method_output = self.diff_method(Rz, self.M, batch_size)
+        if isinstance(method_output, tuple):
+            # Root MUSIC output
+            doa_prediction, doa_all_predictions, roots = method_output
+        else:
+            # Esprit output
+            doa_prediction = method_output
+            doa_all_predictions, roots = None, None
+        return doa_prediction, doa_all_predictions, roots, Rz
+
+
 class SubspaceNetEsprit(SubspaceNet):
     """SubspaceNet is model-based deep learning model for generalizing DOA estimation problem,
         over subspace methods.
@@ -543,38 +1001,58 @@ class DeepAugmentedMUSIC(nn.Module):
         return torch.stack(sv, dim=0)
 
     def spectrum_calculation(self, Un: torch.Tensor):
-        spectrum_equation = []
-        for i in range(self.angels.shape[0]):
-            spectrum_equation.append(
-                torch.real(
-                    torch.conj(self.sv[i]).T @ Un @ torch.conj(Un).T @ self.sv[i]
-                )
-            )
-        spectrum_equation = torch.stack(spectrum_equation, dim=0)
-        spectrum = 1 / spectrum_equation
+        """Vectorized MUSIC spectrum calculation across all candidate angles.
 
+        Computes, for every steering vector sv_i in self.sv:
+            spectrum_equation[i] = real( conj(sv_i) @ Un @ Un^H @ sv_i )
+        for a single sample (Un: [N, N-M]), or batched over samples
+        (Un: [B, N, N-M]) -- in both cases without any Python-level loop
+        over the 361 angles (this used to be a sequential for-loop, which
+        was the dominant training-time bottleneck for this model).
+        """
+        SV = self.sv.to(Un.device)  # [361, N]
+        if Un.dim() == 2:
+            # Single sample: P = Un @ Un^H, shape [N, N]
+            P = Un @ torch.conj(Un).T
+            spectrum_equation = torch.einsum(
+                "ij,jk,ik->i", torch.conj(SV), P, SV
+            ).real
+        else:
+            # Batched: Un shape [B, N, N-M] -> P shape [B, N, N]
+            P = Un @ torch.conj(Un).transpose(-2, -1)
+            spectrum_equation = torch.einsum(
+                "ij,bjk,ik->bi", torch.conj(SV), P, SV
+            ).real
+        spectrum = 1 / spectrum_equation
         return spectrum, spectrum_equation
 
     def pre_MUSIC(self, Rz: torch.Tensor):
-        """Applies the MUSIC operration for generating spectrum
+        """Applies the MUSIC operation for generating the spectrum.
+
+        Vectorized over the batch dimension (was previously a Python
+        for-loop over every sample in the batch, each doing its own
+        eigendecomposition + a further 361-angle inner loop -- with
+        batch_size=2048 this meant ~740K sequential small ops per
+        training batch. torch.linalg.eig natively supports a batched
+        input, so this is now a single batched call.)
 
         Args:
-            Rz (torch.Tensor): Generated covariance matrix
+            Rz (torch.Tensor): Generated covariance matrix, shape [B, N, N]
 
         Returns:
-            torch.Tensor: The generated MUSIC spectrum
+            torch.Tensor: The generated MUSIC spectrum, shape [B, 361]
         """
-        spectrum = []
-        bs_Rz = Rz
-        for iter in range(self.batch_size):
-            R = bs_Rz[iter]
-            # Extract eigenvalues and eigenvectors using EVD
-            _, eigenvectors = torch.linalg.eig(R)
-            # Noise subspace as the eigenvectors which associated with the M first eigenvalues
-            Un = eigenvectors[:, self.M :]
-            # Calculate MUSIC spectrum
-            spectrum.append(self.spectrum_calculation(Un)[0])
-        return torch.stack(spectrum, dim=0)
+        # Batched eigendecomposition: eigenvectors shape [B, N, N]
+        eigenvalues, eigenvectors = torch.linalg.eig(Rz)
+        # Sort by |eigenvalue|, largest first (eig returns them unordered)
+        order = torch.argsort(torch.abs(eigenvalues), dim=-1, descending=True)
+        eigenvectors = torch.gather(
+            eigenvectors, 2, order.unsqueeze(1).expand(-1, Rz.shape[1], -1)
+        )
+        # Noise subspace: eigenvectors associated with the smallest N-M eigenvalues
+        Un = eigenvectors[:, :, self.M :]
+        spectrum, _ = self.spectrum_calculation(Un)
+        return spectrum
 
     def forward(self, X: torch.Tensor):
         """
@@ -595,8 +1073,8 @@ class DeepAugmentedMUSIC(nn.Module):
         X = torch.cat(
             (torch.real(X), torch.imag(X)), 1
         )  # Shape ==  [Batch size, 2N, T]
-        # Reshape Output shape: [Batch size, T, 2N]
-        X = X.view(X.size(0), X.size(2), X.size(1))
+        # Reorder to [Batch size, T, 2N] (permute, not view: view scrambles sensors and time)
+        X = X.permute(0, 2, 1)
         # Apply batch normalization
         X = self.BatchNorm(X)
         # GRU Clock
@@ -665,7 +1143,9 @@ class DeepCNN(nn.Module):
 
     def forward(self, X):
         # X shape == [Batch size, N, N, 3]
-        X = X.view(X.size(0), X.size(3), X.size(2), X.size(1))  # [Batch size, 3, N, N]
+        # [Batch size, 3, N, N] (permute, not view: view mixes channels); contiguous so the
+        # later flatten (.view) works
+        X = X.permute(0, 3, 1, 2).contiguous()
         ## Architecture flow ##
         # CNN block #1: 3xNxN-->256x(N-2)x(N-2)
         X = self.conv1(X)
@@ -708,47 +1188,26 @@ def root_music(Rz: torch.Tensor, M: int, batch_size: int):
         doa_all_batches (torch.Tensor): All doa predicted, given all roots, over all batches.
         roots_to_return (torch.Tensor): The unsorted roots.
     """
-
-    dist = 0.5
-    f = 1
-    doa_batches = []
-    doa_all_batches = []
-    Bs_Rz = Rz
-    for iter in range(batch_size):
-        R = Bs_Rz[iter]
-        # Extract eigenvalues and eigenvectors using EVD
-        eigenvalues, eigenvectors = torch.linalg.eig(R)
-        # Assign noise subspace as the eigenvectors associated with M greatest eigenvalues
-        Un = eigenvectors[:, torch.argsort(torch.abs(eigenvalues)).flip(0)][:, M:]
-        # Generate hermitian noise subspace matrix
-        F = torch.matmul(Un, torch.t(torch.conj(Un)))
-        # Calculates the sum of F matrix diagonals
-        diag_sum = sum_of_diags_torch(F)
-        # Calculates the roots of the polynomial defined by F matrix diagonals
-        roots = find_roots_torch(diag_sum)
-        # Calculate the phase component of the roots
-        roots_angels_all = torch.angle(roots)
-        # Calculate doa
-        doa_pred_all = torch.arcsin((1 / (2 * np.pi * dist * f)) * roots_angels_all)
-        doa_all_batches.append(doa_pred_all)
-        roots_to_return = roots
-        # Take only roots which inside the unit circle
-        roots = roots[
-            sorted(range(roots.shape[0]), key=lambda k: abs(abs(roots[k]) - 1))
-        ]
-        mask = (torch.abs(roots) - 1) < 0
-        roots = roots[mask][:M]
-        # Calculate the phase component of the roots
-        roots_angels = torch.angle(roots)
-        # Calculate doa
-        doa_pred = torch.arcsin((1 / (2 * np.pi * dist * f)) * roots_angels)
-        doa_batches.append(doa_pred)
-
-    return (
-        torch.stack(doa_batches, dim=0),
-        torch.stack(doa_all_batches, dim=0),
-        roots_to_return,
-    )
+    # Batched over samples (same result as the former per-sample loop; batch_size unused)
+    dist, f = 0.5, 1
+    N = Rz.shape[-1]
+    eigenvalues, eigenvectors = torch.linalg.eig(Rz)
+    # Noise subspace: eigenvectors of the N - M smallest |eigenvalues|
+    order = torch.argsort(torch.abs(eigenvalues), dim=-1, descending=True)[:, M:]
+    Un = torch.gather(eigenvectors, 2, order.unsqueeze(1).expand(-1, N, -1))
+    F = Un @ Un.conj().transpose(1, 2)
+    # Polynomial coefficients: sums of the diagonals of F, offsets -(N-1) .. N-1
+    coeffs = torch.stack([torch.diagonal(F, k, dim1=1, dim2=2).sum(-1) for k in range(-N + 1, N)], dim=1)
+    # Roots = eigenvalues of the companion matrix
+    A = torch.diag(torch.ones(2 * N - 3, dtype=coeffs.dtype, device=coeffs.device), -1).repeat(len(Rz), 1, 1)
+    A[:, 0, :] = -coeffs[:, 1:] / coeffs[:, :1]
+    roots = torch.linalg.eigvals(A)
+    to_doa = lambda r: torch.arcsin((1 / (2 * np.pi * dist * f)) * torch.angle(r))
+    # The M roots closest to the unit circle among those inside it
+    gap = torch.abs(torch.abs(roots) - 1).masked_fill(torch.abs(roots) >= 1, float("inf"))
+    closest = torch.argsort(gap, dim=-1)[:, :M]
+    # Third output as before: the unsorted roots of the last sample
+    return to_doa(torch.gather(roots, 1, closest)), to_doa(roots), roots[-1]
 
 
 def esprit(Rz: torch.Tensor, M: int, batch_size: int):
@@ -768,29 +1227,14 @@ def esprit(Rz: torch.Tensor, M: int, batch_size: int):
         doa_batches (torch.Tensor): The predicted doa, over all batches.
     """
 
-    doa_batches = []
-
-    Bs_Rz = Rz
-    for iter in range(batch_size):
-        R = Bs_Rz[iter]
-        # Extract eigenvalues and eigenvectors using EVD
-        eigenvalues, eigenvectors = torch.linalg.eig(R)
-
-        # Get signal subspace
-        Us = eigenvectors[:, torch.argsort(torch.abs(eigenvalues)).flip(0)][:, :M]
-        # Separate the signal subspace into 2 overlapping subspaces
-        Us_upper, Us_lower = (
-            Us[0 : R.shape[0] - 1],
-            Us[1 : R.shape[0]],
-        )
-        # Generate Phi matrix
-        phi = torch.linalg.pinv(Us_upper) @ Us_lower
-        # Find eigenvalues and eigenvectors (EVD) of Phi
-        phi_eigenvalues, _ = torch.linalg.eig(phi)
-        # Calculate the phase component of the roots
-        eigenvalues_angels = torch.angle(phi_eigenvalues)
-        # Calculate the DoA out of the phase component
-        doa_predictions = -1 * torch.arcsin((1 / np.pi) * eigenvalues_angels)
-        doa_batches.append(doa_predictions)
-
-    return torch.stack(doa_batches, dim=0)
+    # Batched over samples (same result as the former per-sample loop; batch_size unused)
+    # Extract eigenvalues and eigenvectors using EVD
+    eigenvalues, eigenvectors = torch.linalg.eig(Rz)
+    # Signal subspace: eigenvectors of the M largest |eigenvalues|
+    order = torch.argsort(torch.abs(eigenvalues), dim=-1, descending=True)[:, :M]
+    Us = torch.gather(eigenvectors, 2, order.unsqueeze(1).expand(-1, Rz.shape[1], -1))
+    # Rotational invariance between the two overlapping sub-arrays
+    phi = torch.linalg.pinv(Us[:, :-1]) @ Us[:, 1:]
+    phi_eigenvalues, _ = torch.linalg.eig(phi)
+    # Calculate the DoA out of the phase component
+    return -1 * torch.arcsin((1 / np.pi) * torch.angle(phi_eigenvalues))

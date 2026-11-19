@@ -32,6 +32,8 @@ Attributes:
 import torch
 import numpy as np
 import itertools
+import math
+import random
 from tqdm import tqdm
 from src.signal_creation import Samples
 from pathlib import Path
@@ -74,13 +76,25 @@ def create_dataset(
     samples_model = Samples(system_model_params)
     # Generate permutations for CNN model training dataset
     if model_type.startswith("DeepCNN") and phase.startswith("train"):
-        doa_permutations = []
+        # NOTE: the full combinatorial set C(361, M) can be enormous
+        # (e.g. ~7.78 million for M=3) and materializing every one of them
+        # in RAM (as this used to do) can exhaust memory and crash the
+        # process partway through. Instead, randomly sample `samples_size`
+        # distinct M-angle combinations directly, without ever building the
+        # full combinatorial list.
         angles_grid = np.linspace(start=-90, stop=90, num=361)
-        for comb in itertools.combinations(angles_grid, system_model_params.M):
-            doa_permutations.append(list(comb))
+        max_combinations = math.comb(len(angles_grid), system_model_params.M)
+        n_target = min(samples_size, max_combinations)
+        doa_permutations_set = set()
+        while len(doa_permutations_set) < n_target:
+            combo = tuple(
+                sorted(random.sample(list(angles_grid), system_model_params.M))
+            )
+            doa_permutations_set.add(combo)
+        doa_permutations = [list(c) for c in doa_permutations_set]
 
     if model_type.startswith("DeepCNN") and phase.startswith("train"):
-        for i, doa in tqdm(enumerate(doa_permutations)):
+        for i, doa in tqdm(enumerate(doa_permutations), total=len(doa_permutations)):
             # Samples model creation
             samples_model.set_doa(doa)
             # Observations matrix creation
@@ -92,7 +106,7 @@ def create_dataset(
             )
             X_model = create_cov_tensor(X)
             # Ground-truth creation
-            Y = torch.zeros_like(torch.tensor(angles_grid))
+            Y = torch.zeros_like(torch.tensor(angles_grid, dtype=torch.float32))
             for angle in doa:
                 Y[list(angles_grid).index(angle)] = 1
             model_dataset.append((X_model, Y))
@@ -144,6 +158,60 @@ def create_dataset(
     return model_dataset, generic_dataset, samples_model
 
 
+def create_observations(
+    system_model_params: SystemModelParams, samples_size: int, true_doa: list = None,
+    sir_range: tuple = None, coherent_fraction: float = None,
+):
+    """Draws samples_size observations once, as a list of (X, DoA [rad]).
+    Every model's input is derived from these same X (see model_features),
+    so all models train and test on identical data.
+    sir_range=(low, high) [dB] draws SIR ~ U[low, high] per sample and makes the last
+    source stronger than the others by -SIR dB (same convention as E9).
+    coherent_fraction=p makes each sample coherent with probability p, non-coherent otherwise (X12)."""
+    samples_model = Samples(system_model_params)
+    equal_powers, nature = samples_model.params.source_power_db, samples_model.params.signal_nature
+    observations = []
+    for _ in tqdm(range(samples_size)):
+        if coherent_fraction is not None:
+            samples_model.params.signal_nature = "coherent" if np.random.rand() < coherent_fraction else "non-coherent"
+        if sir_range is not None:
+            samples_model.params.source_power_db = [0] * (samples_model.params.M - 1) + [-np.random.uniform(*sir_range)]
+        samples_model.set_doa(true_doa)
+        # Random source order (set_doa sorts), so a per-source power offset
+        # (source_power_db) lands on a random angle, not always the largest one
+        samples_model.doa = np.random.permutation(samples_model.doa)
+        X = torch.tensor(
+            samples_model.samples_creation(
+                noise_mean=0, noise_variance=1, signal_mean=0, signal_variance=1
+            )[0],
+            dtype=torch.complex64,
+        )
+        observations.append((X, torch.tensor(samples_model.doa, dtype=torch.float64)))
+    # do not leave the last draw in the caller's params
+    samples_model.params.source_power_db, samples_model.params.signal_nature = equal_powers, nature
+    return observations, samples_model
+
+
+def model_features(observations: list, model_type: str, tau: int = None, grid_labels=False):
+    """Derives one model's (input, label) pairs from shared observations.
+    grid_labels=True gives DeepCNN its training target: a multi-hot vector over the
+    361-point 0.5-degree grid, with each DoA mapped to its nearest bin."""
+    dataset = []
+    for X, doa in observations:
+        if model_type.startswith("SubspaceNet"):
+            x = create_autocorrelation_tensor(X, tau).to(torch.float)
+        elif model_type.startswith("DeepCNN"):
+            x = create_cov_tensor(X)
+        else:
+            x = X
+        y = doa
+        if grid_labels:
+            y = torch.zeros(361, dtype=torch.float32)
+            y[torch.round((torch.rad2deg(doa) + 90) / 0.5).long()] = 1
+        dataset.append((x, y))
+    return dataset
+
+
 # def read_data(Data_path: str) -> torch.Tensor:
 def read_data(path: str):
     """
@@ -168,7 +236,12 @@ def read_data(path: str):
 
     """
     assert isinstance(path, (str, Path))
-    data = torch.load(path)
+    # PyTorch >= 2.6 defaults torch.load's weights_only to True, which blocks
+    # unpickling custom classes like src.signal_creation.Samples. These files
+    # are ones you generated yourself with this codebase's own dataset
+    # creation pipeline (not untrusted external files), so weights_only=False
+    # is safe here.
+    data = torch.load(path, weights_only=False)
     return data
 
 
@@ -187,13 +260,25 @@ def autocorrelation_matrix(X: torch.Tensor, lag: int):
         torch.Tensor: The autocorrelation matrix for the given lag.
 
     """
-    Rx_lag = torch.zeros(X.shape[0], X.shape[0], dtype=torch.complex128).to(device)
-    for t in range(X.shape[1] - lag):
-        # meu = torch.mean(X,1)
-        x1 = torch.unsqueeze(X[:, t], 1).to(device)
-        x2 = torch.t(torch.unsqueeze(torch.conj(X[:, t + lag]), 1)).to(device)
-        Rx_lag += torch.matmul(x1 - torch.mean(X), x2 - torch.mean(X)).to(device)
-    Rx_lag = Rx_lag / (X.shape[-1] - lag)
+    Rx_lag = torch.zeros(X.shape[0], X.shape[0], dtype=torch.complex128)
+    n_terms = X.shape[1] - lag
+    if n_terms <= 0:
+        # Structurally undefined: this lag exceeds the number of available
+        # snapshots (T <= lag), e.g. tau > T scenarios (very few
+        # observations). Return a zero matrix instead of dividing by zero
+        # or a negative number (which produced NaN/Inf and crashed
+        # downstream eigendecompositions). This degrades gracefully
+        # (missing lag information -> less accurate estimate) rather than
+        # crashing -- which is the expected, realistic behavior for a
+        # low-snapshot regime.
+        Rx_lag = torch.cat((torch.real(Rx_lag), torch.imag(Rx_lag)), 0)
+        return Rx_lag
+    # Vectorized form of sum_t (x_t - mean) (conj(x_{t+lag}) - mean)^T / n_terms,
+    # identical to the former per-t loop (same scalar mean, same conjugation order)
+    X = X.to(torch.complex128)
+    mean = torch.mean(X)
+    Rx_lag = (X[:, :n_terms] - mean) @ (torch.conj(X[:, lag : lag + n_terms]) - mean).T
+    Rx_lag = Rx_lag / n_terms
     Rx_lag = torch.cat((torch.real(Rx_lag), torch.imag(Rx_lag)), 0)
     return Rx_lag
 

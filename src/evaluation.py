@@ -35,7 +35,7 @@ from src.criterions import RMSPELoss, MSPELoss
 from src.criterions import RMSPE, MSPE
 from src.methods import MUSIC, RootMUSIC, Esprit, MVDR
 from src.utils import *
-from src.models import SubspaceNet
+from src.models import SubspaceNet, SubspaceNetAttn, SubspaceNetIter
 from src.plotting import plot_spectrum
 
 
@@ -87,16 +87,22 @@ def evaluate_dnn_model(
             elif model_type.startswith("DeepCNN"):
                 # Deep CNN
                 if isinstance(criterion, nn.BCELoss):
-                    # If evaluation performed over validation set, loss is BCE
+                    # BCE compares the full 361-bin probability grid against
+                    # the full 361-bin target grid directly -- it must NOT
+                    # be converted to peak-picked angles (that conversion
+                    # is only correct for RMSPE-based test-time evaluation,
+                    # see the elif branch below).
                     DOA_predictions = model_output
-                    # find peaks in the pseudo spectrum of probabilities
+                elif isinstance(criterion, (RMSPELoss, MSPELoss)):
+                    # If evaluation performed over testset, loss is RMSPE / MSPE
+                    # -- must first extract M angle peaks from the 361-bin
+                    # probability grid (same as the BCE branch above),
+                    # otherwise the raw 361-length grid gets compared
+                    # directly against the M-length DOA vector.
                     DOA_predictions = (
-                        get_k_peaks(361, DOA.shape[1], DOA_predictions[0]) * D2R
+                        get_k_peaks(361, DOA.shape[1], model_output[0]) * D2R
                     )
                     DOA_predictions = DOA_predictions.view(1, DOA_predictions.shape[0])
-                elif isinstance(criterion, [RMSPELoss, MSPELoss]):
-                    # If evaluation performed over testset, loss is RMSPE / MSPE
-                    DOA_predictions = model_output
                 else:
                     raise Exception(
                         f"evaluate_dnn_model: Loss criterion is not defined for {model_type} model"
@@ -113,8 +119,12 @@ def evaluate_dnn_model(
                 eval_loss = criterion(DOA_predictions.float(), DOA.float())
             else:
                 eval_loss = criterion(DOA_predictions, DOA)
-            # add the batch evaluation loss to epoch loss
-            overall_loss += eval_loss.item()
+            # add the batch evaluation loss to epoch loss (BCE is a batch mean,
+            # RMSPE a batch sum: rescale BCE so both end up as per-sample means)
+            if isinstance(criterion, nn.BCELoss):
+                overall_loss += eval_loss.item() * DOA.shape[0]
+            else:
+                overall_loss += eval_loss.item()
         overall_loss = overall_loss / test_length
     # Plot spectrum for SubspaceNet model
     if plot_spec and model_type.startswith("SubspaceNet"):
@@ -138,6 +148,7 @@ def evaluate_augmented_model(
     algorithm: str = "music",
     plot_spec: bool = False,
     figures: dict = None,
+    label_prefix: str = "SubNet+",
 ):
     """
     Evaluate an augmented model that combines a SubspaceNet model with another subspace method on a given dataset.
@@ -151,6 +162,9 @@ def evaluate_augmented_model(
         algorithm (str): The hybrid algorithm to use (e.g., "music", "mvdr", "esprit"). Defaults to "music".
         plot_spec (bool): Whether to plot the spectrum for the hybrid algorithm. Defaults to False.
         figures (dict): Dictionary containing figure objects for plotting. Defaults to None.
+        label_prefix (str): Legend label prefix, e.g. "SubspaceNet+", "SubspaceNetAttn+",
+            "SubspaceNetIter+", so curves from different models can be told apart on a
+            shared overlay plot. Defaults to "SubNet+" (matches original behavior).
 
     Returns:
     --------
@@ -163,7 +177,7 @@ def evaluate_augmented_model(
     """
     # Initialize parameters for evaluation
     hybrid_loss = []
-    if not isinstance(model, SubspaceNet):
+    if not isinstance(model, (SubspaceNet, SubspaceNetAttn, SubspaceNetIter)):
         raise Exception("evaluate_augmented_model: model is not from type SubspaceNet")
     # Set model to eval mode
     model.eval()
@@ -196,23 +210,38 @@ def evaluate_augmented_model(
                 # If the amount of predictions is less than the amount of sources
                 predictions = add_random_predictions(M, predictions, algorithm)
                 # Calculate loss criterion
-                loss = criterion(predictions, DOA * R2D)
+                loss = criterion(predictions, DOA.cpu() * R2D)
                 hybrid_loss.append(loss)
             else:
                 hybrid_loss.append(0)
-            # Plot spectrum, if algorithm is "music" or "mvdr"
+            # Plot spectrum, if algorithm is "music" or "mvdr" or "r-music"
             if not algorithm.startswith("esprit"):
                 if plot_spec and i == len(dataset.dataset) - 1:
-                    predictions, spectrum = method_output[0], method_output[1]
-                    figures[algorithm]["norm factor"] = np.max(spectrum)
-                    plot_spectrum(
-                        predictions=predictions,
-                        true_DOA=DOA * R2D,
-                        system_model=system_model,
-                        spectrum=spectrum,
-                        algorithm="SubNet+" + algorithm.upper(),
-                        figures=figures,
-                    )
+                    if algorithm.startswith("r-music"):
+                        # method_output = (doa_predictions, roots,
+                        # doa_predictions_all, roots_angels_all, M) --
+                        # element 1 is the roots (needed by the polar
+                        # plot), not a "spectrum".
+                        predictions_all = method_output[2]
+                        roots = method_output[1]
+                        plot_spectrum(
+                            predictions=predictions_all,
+                            true_DOA=DOA * R2D,
+                            roots=roots,
+                            algorithm=label_prefix + algorithm.upper(),
+                            figures=figures,
+                        )
+                    else:
+                        predictions, spectrum = method_output[0], method_output[1]
+                        figures[algorithm]["norm factor"] = np.max(spectrum)
+                        plot_spectrum(
+                            predictions=predictions,
+                            true_DOA=DOA * R2D,
+                            system_model=system_model,
+                            spectrum=spectrum,
+                            algorithm=label_prefix + algorithm.upper(),
+                            figures=figures,
+                        )
     return np.mean(hybrid_loss)
 
 
@@ -396,8 +425,11 @@ def evaluate(
             Defaults to None.
 
     Returns:
-        None
+        dict: Mapping from method label (e.g. "SubspaceNetAttn", "esprit",
+            "augmented esprit", "r-music") to its test loss. Existing callers
+            that ignore the return value are unaffected.
     """
+    results = {}
     # Set default methods for SubspaceNet augmentation
     if not isinstance(augmented_methods, list) and model_type.startswith("SubspaceNet"):
         augmented_methods = [
@@ -428,6 +460,7 @@ def evaluate(
         model_type=model_type,
     )
     print(f"{model_type} Test loss = {model_test_loss}")
+    results[model_type] = model_test_loss
     # Evaluate SubspaceNet augmented methods
     for algorithm in augmented_methods:
         loss = evaluate_augmented_model(
@@ -440,6 +473,7 @@ def evaluate(
             figures=figures,
         )
         print("augmented {} test loss = {}".format(algorithm, loss))
+        results[f"{model_type}+{algorithm}"] = loss
     # Evaluate classical subspace methods
     for algorithm in subspace_methods:
         loss = evaluate_model_based(
@@ -451,3 +485,5 @@ def evaluate(
             figures=figures,
         )
         print("{} test loss = {}".format(algorithm.lower(), loss))
+        results[algorithm.lower()] = loss
+    return results

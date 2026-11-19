@@ -1,30 +1,71 @@
-# SubspaceNet: Deep Learning-Aided Subspace Methods for DoA
-This repository includes the source code used in our recent paper:
+# Single-lag surrogate covariances for direction-of-arrival estimation
 
-Dor H. Shmuel, Julian P. Merkofer, Guy Revach, Ruud J. G. van Sloun, and Nir Shlezinger,
-["SubspaceNet: Deep Learning-Aided Subspace Methods for DoA Estimation"](https://arxiv.org/abs/2306.02271)
+Code, result files and figure scripts for the article
 
-## Absract
-Direction of arrival (DoA) estimation is a fundamental task in array processing. A popular family of DoA estimation algorithms are subspace methods, which operate by dividing the measurements into distinct signal and noise subspaces. Subspace methods, such as MUSIC and Root-MUSIC, rely on several restrictive assumptions, including narrow-band non-coherent sources and fully calibrated arrays, and their performance is considerably degraded when these do not hold.
-In this work we propose SubspaceNet; a data-driven DoA universal estimator which learns how to divide the observations into distinguishable subspaces. This is achieved by utilizing a dedicated deep neural network to learn the empirical autocorrelation of the input, by training it as part of the Root-MUSIC method, leveraging the inherent differentiability of this specific DoA estimator, while removing the need to provide a ground-truth decomposable autocorrelation matrix. Once trained, the resulting SubspaceNet serves as a universal surrogate covariance estimator that can be applied in combination with any subspace-based \ac{doa} estimation method, allowing its successful application in challenging setups. SubspaceNet is shown to enable various DoA estimation algorithms to cope with coherent sources, wideband signals, low SNR, array mismatches, and limited snapshots, while preserving the interpretability and the suitability of classic subspace methods. 
+> S. Iben Dhiaf, T. Elmissaoui and J. Belhadj Tahar, *Single-Lag Fully Connected Encoding for Surrogate-Covariance Direction-of-Arrival Estimation under Coherent Sources and Array Errors*, Frontiers in Signal Processing (under review).
 
-## Overview
-This repository consists of following Python scripts:
-* `main.py` this scripts is the interface for applying the proposed algorithms, by wrapping all the required procedures and parameters for the simulation.
-* `src.training.py` handling the simulation of the algorithms, including the training and evaluation stage.
-* `src.criterions.py` defines document several loss functions (RMSPELoss and MSPELoss).
-* `src.data_handler.py` handles the creation and processing of synthetic datasets based on specified parameters and model types.
-* `src.methods.py` defines the classical and model-based methods, which used for simulation.
-* `src.models.py` defines the tested NN-models and the model-based DL models, which used for simulation.
-* `src.signal_creation.py` defines and creates signals and observations. Inherits from SystemModel class.
-* `src.system_model.py` defines the SystemModel class for defining the settings of the DoA estimation system model.
-* `src.utils.py` defines some helpful functions.
+The code compares four surrogate-covariance encoders trained end to end through a differentiable ESPRIT: **SubspaceNet-FC** (a fully connected encoder of the zero-lag sample covariance, 40,400 parameters), the convolutional **SubspaceNet**, and two lag-attention encoders, **Attn** and **Iter**. It builds on the public SubspaceNet implementation, <https://github.com/ShlezingerLab/SubspaceNet>, by D. H. Shmuel, J. P. Merkofer, G. Revach, R. J. G. van Sloun and N. Shlezinger.
 
-## Requirements
-This script requires that pyenv\requirements.txt will be installed within the Python environment you are running in.
+## Contents
 
-Another option in the activate pyEnv\SubspaceNetEnv python environment.
+| Path | Content |
+|---|---|
+| `src/` | Signal model, array errors, models (`models.py`), differentiable ESPRIT and Root-MUSIC, losses, training loop |
+| `train_v2.py` | Training of every learned model (one shared data set, fixed split, early stopping) |
+| `train_baselines.py` | Training of the DA-MUSIC baseline |
+| `evaluate_v2.py` | Experiments E1–E13 on fixed test seeds: errors, bootstrap intervals, paired tests, latency |
+| `eval_tagged.py`, `fc_eformat.py` | Evaluation of the additional runs (ablations, SubspaceNet-FC) on the same test data |
+| `x2_transfer.py`, `x4_shuffle_lags.py`, `x5_attention.py`, `x8_x9_eval.py`, `x11_spectrum.py` | Transfer between estimators, shuffling of the higher lags, attention weights, other source numbers and arrays, eigenstructure under a strong interferer |
+| `stats_x13.py` | Seed-pair tests and Benjamini–Hochberg correction over all paired tests |
+| `paper_assets.py`, `plot_v2.py`, `pipeline_figures.py` | Figures 1–6 and the tables, generated from the result files |
+| `data/simulations/results_v2/` | Result files of the article: summary tables (`*.csv`, `*.json`) and per-sample errors (`per_sample/*.npz`) |
+| `tests/` | Unit tests (`python tests/test_v2_fixes.py`) |
 
-## Getting started
-If you just want to run the code, run main.py script (for nominal scenario, as detiled in the script).
-For changing simulation parameters follow the documentaion in main.py script.
+## Installation
+
+Python 3.11. The results were produced with PyTorch 2.5.1 (CUDA 12.1) on one NVIDIA GeForce RTX 4070.
+
+```bash
+pip install -r requirements.txt
+```
+
+## Data
+
+All data are simulated. The training set (100,000 samples, data seed 2026) and every test point (fixed seed per point) are regenerated by the scripts; nothing has to be downloaded.
+
+## Trained weights
+
+The weights of all runs reported in the article are archived separately: **[archive DOI]**. Place them in `data/weights/v2/`.
+
+## Reproducing the article
+
+Training (one command per model and seed, `--seed 0`, `1` and `2`):
+
+```bash
+python train_v2.py --model SubspaceNet --lr 1e-3 --seed 0
+python train_v2.py --model SubspaceNetAttn --lr 1e-3 --seed 0
+python train_v2.py --model SubspaceNetIter --lr 1e-3 --seed 0
+python train_v2.py --model SubspaceNetAttn --variant mlp48 --tau 1 --tag abl1-mlp48 --lr 1e-3 --epochs 500 --seed 0
+```
+
+The last line trains SubspaceNet-FC. The additional experiments use the same script with `--tau`, `--variant`, `--diff-method`, `--coherent-fraction`, `--sir-range`, `--M`, `--N` or `--array`, and a `--tag` naming the run.
+
+Evaluation, statistics and figures:
+
+```bash
+python evaluate_v2.py
+python fc_eformat.py
+python stats_x13.py
+python paper_assets.py
+python pipeline_figures.py
+```
+
+Training is not bit-reproducible on GPU: two runs with the same seed end within about 0.01° of each other.
+
+## Licence
+
+This repository is a fork of <https://github.com/ShlezingerLab/SubspaceNet>, which states no licence. The files derived from it (in particular `src/`) remain subject to the terms of the original repository and to the GitHub Terms of Service for forks. [Licence of the files written for this article, to be completed by the authors.]
+
+## Citation
+
+[To be completed after publication.]
