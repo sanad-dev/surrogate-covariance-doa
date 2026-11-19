@@ -35,7 +35,7 @@ All data are simulated. The training set (100,000 samples, data seed 2026) and e
 
 ## Trained weights
 
-The weights of all runs reported in the article are attached to the release [v1.0-revision](https://github.com/sanad-dev/surrogate-covariance-doa/releases/tag/v1.0-revision) as six archives, `weights_v2_part1of6.zip` to `weights_v2_part6of6.zip` (504 MB in total). Each archive is independent: unzip all six at the repository root and the files go to `data/weights/v2/`.
+The trained weights of the runs reported in the article are available from the corresponding author on request. Place them in `data/weights/v2/`. The result files in `data/simulations/results_v2/` allow every table, figure and statistical test of the article to be checked without the weights.
 
 ## Reproducing the article
 
